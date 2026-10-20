@@ -1,0 +1,81 @@
+name: Bump XERJ version
+
+# Once a week, look for a newer XERJ release. If there is one, download it,
+# check it against the checksum XERJ publishes, pin the new version and
+# SHA-256 in the Dockerfile, and open a pull request for you to review.
+#
+# One-time setup: Settings > Actions > General > Workflow permissions >
+# tick "Allow GitHub Actions to create and approve pull requests".
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Look for a newer XERJ release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag=$(gh release list --repo xerj-org/xerj --exclude-drafts --limit 1 --json tagName -q '.[0].tagName')
+          newest="${tag#v}"
+          current=$(sed -n 's/^ARG XERJ_VERSION=//p' Dockerfile)
+          echo "Pinned: ${current}  Newest: ${newest}"
+          if [ -z "$newest" ] || [ "$newest" = "$current" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          asset="xerj-${newest}-x86_64-unknown-linux-musl.tar.gz"
+          base="https://github.com/xerj-org/xerj/releases/download/${tag}"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset" "$base/$asset"
+          published=$(curl -fsSL --retry 3 "$base/$asset.sha256" | awk '{print $1}' | tr 'A-F' 'a-f')
+          computed=$(sha256sum "$RUNNER_TEMP/$asset" | awk '{print $1}')
+          if [ "$published" != "$computed" ]; then
+            echo "Checksum mismatch: XERJ published ${published}, download is ${computed}. Not updating."
+            exit 1
+          fi
+          tar -tzf "$RUNNER_TEMP/$asset" | grep -qx "xerj-${newest}-x86_64-unknown-linux-musl/xerj" \
+            || { echo "Release layout changed (binary not where the Dockerfile expects it). Not updating."; exit 1; }
+          sed -i "s/^ARG XERJ_VERSION=.*/ARG XERJ_VERSION=${newest}/; s/^ARG XERJ_SHA256=.*/ARG XERJ_SHA256=${computed}/" Dockerfile
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "version=${newest}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Open a pull request
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.check.outputs.version }}
+          TAG: ${{ steps.check.outputs.tag }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+          branch="bump-xerj-${VERSION}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "A pull request branch for ${VERSION} already exists."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -am "Bump XERJ to ${VERSION}"
+          git push origin "$branch"
+          {
+            printf 'New XERJ release: https://github.com/xerj-org/xerj/releases/tag/%s\n\n' "$TAG"
+            printf 'The Dockerfile now pins %s and its SHA-256, checked against the checksum XERJ publishes.\n\n' "$VERSION"
+            printf 'Before merging: read the release notes, deploy this branch once on Railway, then run `sh scripts/smoke-test.sh <url> <key>`.\n'
+          } > "$RUNNER_TEMP/pr-body.md"
+          gh pr create --base "$BASE" --head "$branch" \
+            --title "Bump XERJ to ${VERSION}" \
+            --body-file "$RUNNER_TEMP/pr-body.md"
