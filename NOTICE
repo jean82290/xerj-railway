@@ -1,0 +1,11 @@
+This repository packages XERJ for Railway. It does not modify XERJ.
+
+XERJ
+Copyright 2026 The XERJ Authors
+
+This product includes software developed by the XERJ project (https://xerj.org).
+XERJ is licensed under the Apache License, Version 2.0; a copy of the license
+is installed in the image at /usr/share/doc/xerj/LICENSE.
+
+This template is community-maintained and is not affiliated with or endorsed
+by the XERJ project.
