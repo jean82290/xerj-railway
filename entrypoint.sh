@@ -81,4 +81,18 @@ model_cache_dir = "$DATA_DIR/.models"
 EOF
 
 log "starting $(xerj -V 2>/dev/null | head -n 1) on $BIND:$PORT, data in $DATA_DIR"
+
+# Until a console owner exists, XERJ prints a single-use link on every boot
+# that claims its web console (which does not use the API key). Its passkey
+# sign-in cannot work behind Railway's domain anyway, so the link only helps
+# someone who can read the logs, for example on a public demo project.
+# Hide the token in the logs. XERJ still runs as PID 1 (exec), so Railway's
+# stop signal reaches it directly.
+if [ "${XERJ_SHOW_CONSOLE_SETUP_LINK:-false}" != "true" ]; then
+  fifo="${TMPDIR:-/tmp}/xerj-log.$$"
+  rm -f "$fifo"
+  mkfifo "$fifo"
+  sed -u -e 's|\(_xerj-console/setup#token=\)[A-Za-z0-9_-]*|\1[hidden-by-template]|g' < "$fifo" &
+  exec xerj --config "$CONFIG" "$@" > "$fifo" 2>&1
+fi
 exec xerj --config "$CONFIG" "$@"

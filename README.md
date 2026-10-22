@@ -108,11 +108,13 @@ XERJ_API_KEY=${{xerj.XERJ_ADMIN_KEY}}
 | `XERJ_BIND_ADDRESS` | `0.0.0.0` | Set to `::` only in a legacy IPv6-only Railway environment. |
 | `XERJ_LOG` | `info` | Log filter, for example `debug`. |
 | `XERJ_DATA_DIR` | `/data` | Must match the volume's mount path. |
+| `XERJ_SHOW_CONSOLE_SETUP_LINK` | `false` | Set to `true` to stop hiding the token of XERJ's console setup link in the logs (see below). |
 
 ## Good to know
 
 - **Keep the volume.** Without a volume at `/data`, every redeploy starts empty; the logs warn you if it is missing.
 - **One replica.** XERJ runs as a single node here, and a Railway volume attaches to one replica.
+- **Console setup link hidden.** Until a console owner exists, XERJ prints on every boot a single-use link that claims its web console, which does not use the API key. Its passkey sign-in cannot work behind Railway's domain, so the link would only help someone who can read your logs (for example on a public project). The entrypoint replaces its token with `[hidden-by-template]`. Use the API key for everything; set `XERJ_SHOW_CONSOLE_SETUP_LINK=true` only if you know you need the link.
 - **XERJ is a release candidate** (1.0.0-rc series). Read its [caveats](https://xerj.org/llms.txt) before relying on a feature, notably that the default embedding mode is lexical, not neural.
 - **Data leaving the node.** A default XERJ node sends no document text anywhere. Only features you switch on (rerank, a proxy embedder, the WAL tap) do; see XERJ's docs.
 - **Updates.** A weekly GitHub Action (`.github/workflows/bump-xerj.yml`) opens a pull request when XERJ publishes a new release, with the new version and checksum pinned.
