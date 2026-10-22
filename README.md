@@ -1,6 +1,6 @@
 # XERJ on Railway
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/YOUR-TEMPLATE-CODE)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/e4jaRT)
 
 One-click [XERJ](https://github.com/xerj-org/xerj) on Railway: a search engine built for AI agents, in a single Rust binary. It speaks the Elasticsearch 8.x REST API, so existing Elasticsearch clients work against it, and it adds semantic search, kNN vector search, hybrid retrieval and namespaced long-term memory for agents. No JVM, no separate vector database.
 
