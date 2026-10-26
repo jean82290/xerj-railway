@@ -20,7 +20,7 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Look for a newer XERJ release
         id: check
@@ -28,11 +28,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          tag=$(gh release list --repo xerj-org/xerj --exclude-drafts --limit 1 --json tagName -q '.[0].tagName')
+          # XERJ also publishes data packs as releases, several a day, under
+          # tags like pack-rust-vulns-2026-10-26. Only a tag shaped like
+          # v1.2.3 or v1.2.3-rc.4 is a release of the XERJ binary.
+          version_tag='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
+          tag=$(gh release view --repo xerj-org/xerj --json tagName -q .tagName 2>/dev/null || true)
+          if ! printf '%s\n' "$tag" | grep -Eq "$version_tag"; then
+            tag=$(gh release list --repo xerj-org/xerj --exclude-drafts --limit 200 --json tagName -q '.[].tagName' \
+              | grep -E "$version_tag" | head -n 1 || true)
+          fi
           newest="${tag#v}"
           current=$(sed -n 's/^ARG XERJ_VERSION=//p' Dockerfile)
-          echo "Pinned: ${current}  Newest: ${newest}"
+          echo "Pinned: ${current}  Newest XERJ release: ${newest:-none found}"
           if [ -z "$newest" ] || [ "$newest" = "$current" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Never go backwards. dpkg orders 1.0.0~rc.99 before 1.0.0, like semver.
+          if ! dpkg --compare-versions "$(printf '%s' "$newest" | sed 's/-/~/')" gt "$(printf '%s' "$current" | sed 's/-/~/')"; then
+            echo "${newest} is not newer than ${current}. Nothing to do."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
