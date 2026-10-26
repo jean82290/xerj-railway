@@ -9,8 +9,8 @@
 # To upgrade: change XERJ_VERSION and XERJ_SHA256 together (the weekly GitHub
 # Action in .github/workflows does this for you and opens a pull request).
 
-ARG XERJ_VERSION=1.0.0-rc.97
-ARG XERJ_SHA256=f401da4dfc2e5c7dd27580d3896229baa088c598c77735266888669240149a00
+ARG XERJ_VERSION=1.0.0-rc.99
+ARG XERJ_SHA256=f29dd2f9f3dfa4e3eba24401fb52f7a4ed79773a9c3e303d5979745f5c827526
 
 FROM debian:bookworm-slim AS fetch
 ARG XERJ_VERSION
