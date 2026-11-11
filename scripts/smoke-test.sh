@@ -23,6 +23,7 @@ echo "Testing $URL"
 check "health check answers without a key" 200 "$(code "$URL/health/ready")"
 check "API refuses a request with no key"  401 "$(code "$URL/")"
 check "API accepts the admin key"          200 "$(code -H "Authorization: ApiKey $KEY" "$URL/")"
+check "web console is not exposed"         404 "$(code "$URL/_xerj-console/setup")"
 
 check "create an index" 200 "$(code -X PUT -H "Authorization: ApiKey $KEY" -H 'Content-Type: application/json' \
   "$URL/$IDX" -d '{"mappings":{"properties":{"title":{"type":"text"},"body":{"type":"semantic_text"}}}}')"
