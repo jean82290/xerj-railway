@@ -1,0 +1,32 @@
+# Public front door of the service. Railway terminates TLS and sends plain
+# HTTP to $PORT; Caddy forwards it to XERJ, which listens on loopback only.
+{
+	admin off
+	auto_https off
+	persist_config off
+	log {
+		output stderr
+		format console
+		level WARN
+	}
+}
+
+:{$PORT} {
+	# XERJ's web console has its own sign-in (passkeys bound to "localhost")
+	# and does not use the API key. It cannot work behind Railway's domain,
+	# and its setup and sign-in pages would otherwise be public, so every
+	# path under it answers 404. The API key protects everything else.
+	@console path *xerj-console*
+	respond @console 404
+
+	header {
+		-Server
+		-Via
+	}
+
+	reverse_proxy 127.0.0.1:{$XERJ_INTERNAL_PORT} {
+		# Stream replies (search hits, bulk results, server-sent events)
+		# instead of buffering them.
+		flush_interval -1
+	}
+}

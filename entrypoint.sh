@@ -1,6 +1,11 @@
-#!/bin/sh
-# Adapts XERJ to Railway, then hands the process over to XERJ (exec), so
-# Railway's SIGTERM reaches XERJ directly and it flushes before stopping.
+#!/bin/bash
+# Adapts XERJ to Railway, then runs two processes:
+#   - XERJ, listening on loopback only (127.0.0.1), never reachable directly;
+#   - Caddy, on $PORT, which forwards to XERJ and answers 404 for XERJ's web
+#     console (see Caddyfile).
+# This shell stays as PID 1: it passes Railway's stop signal to both, so XERJ
+# flushes before stopping, and it exits as soon as either one stops, so
+# Railway restarts the container.
 #
 # Variables (all optional except where noted):
 #   PORT                       public port Railway routes to (default 9200)
@@ -9,11 +14,11 @@
 #                              in /data/admin.key (read it with `railway ssh`).
 #   XERJ_DATA_DIR              where indices live; mount the volume here
 #                              (default /data)
-#   XERJ_BIND_ADDRESS          default 0.0.0.0; use :: only in a legacy
-#                              IPv6-only Railway environment
 #   XERJ_EMBED_MODE            lexical (default) | neural | proxy  (read by XERJ)
 #   XERJ_MAX_PROCESS_MEMORY_MB memory cap in MiB, or auto (read by XERJ)
 #   XERJ_LOG                   log filter, e.g. info or debug (read by XERJ)
+#   XERJ_SHOW_CONSOLE_SETUP_LINK  true = do not hide the console setup token
+#                              in the logs (default false)
 set -eu
 
 log() { echo "xerj-railway: $*"; }
@@ -21,22 +26,32 @@ die() { echo "xerj-railway: ERROR: $*" >&2; exit 1; }
 
 DATA_DIR="${XERJ_DATA_DIR:-/data}"
 PORT="${PORT:-9200}"
-BIND="${XERJ_BIND_ADDRESS:-0.0.0.0}"
 CONFIG="${XERJ_GENERATED_CONFIG:-/tmp/xerj.toml}"
+CADDYFILE="${XERJ_CADDYFILE:-/etc/caddy/Caddyfile}"
 
 case "$PORT" in
   ''|*[!0-9]*) die "PORT must be a number, got '$PORT'" ;;
 esac
 [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "PORT must be between 1 and 65535, got '$PORT'"
 
-# XERJ also opens its native REST API and gRPC on two more ports (private
-# only). Keep them out of PORT's way.
-REST_PORT=8080
-GRPC_PORT=8081
-if [ "$PORT" = "8080" ] || [ "$PORT" = "8081" ]; then
-  REST_PORT=18080
-  GRPC_PORT=18081
-fi
+# XERJ's three listeners, on loopback. Keep them out of PORT's way.
+XERJ_INTERNAL_PORT=19200
+REST_PORT=19280
+GRPC_PORT=19281
+case "$PORT" in
+  19200|19280|19281) XERJ_INTERNAL_PORT=29200; REST_PORT=29280; GRPC_PORT=29281 ;;
+esac
+export PORT XERJ_INTERNAL_PORT
+
+# XERJ reads these from the environment and they would override the loopback
+# bind and fixed ports below (an older version of this template documented
+# XERJ_BIND_ADDRESS). Caddy now listens on every interface, IPv4 and IPv6.
+for var in XERJ_BIND_ADDRESS XERJ_ALLOW_INSECURE_NETWORK_BIND XERJ_AUTO_PORT; do
+  if [ -n "${!var+x}" ]; then
+    log "ignoring $var: XERJ listens on loopback only and Caddy serves \$PORT"
+    unset "$var"
+  fi
+done
 
 mkdir -p "$DATA_DIR"
 
@@ -62,15 +77,14 @@ else
   log "XERJ_ADMIN_KEY is empty: XERJ keeps or generates $DATA_DIR/admin.key"
 fi
 
-# TLS is terminated by Railway's edge, so XERJ serves plain HTTP inside the
-# container. allow_insecure_network_bind declares exactly that; auth stays ON.
+# Loopback bind: nothing outside this container reaches XERJ except through
+# Caddy, so XERJ needs neither its own TLS nor allow_insecure_network_bind.
 cat > "$CONFIG" <<EOF
 [server]
-es_compat_port = $PORT
+es_compat_port = $XERJ_INTERNAL_PORT
 rest_port = $REST_PORT
 grpc_port = $GRPC_PORT
-bind_address = "$BIND"
-allow_insecure_network_bind = true
+bind_address = "127.0.0.1"
 data_dir = "$DATA_DIR"
 
 [auth]
@@ -80,19 +94,55 @@ enabled = true
 model_cache_dir = "$DATA_DIR/.models"
 EOF
 
-log "starting $(xerj -V 2>/dev/null | head -n 1) on $BIND:$PORT, data in $DATA_DIR"
+# Caddy keeps nothing on disk with this config; point its folders at /tmp so
+# it never writes into the volume.
+export XDG_CONFIG_HOME=/tmp/caddy/config XDG_DATA_HOME=/tmp/caddy/data
+
+log "starting $(xerj -V 2>/dev/null | head -n 1) on 127.0.0.1:$XERJ_INTERNAL_PORT, data in $DATA_DIR"
 
 # Until a console owner exists, XERJ prints a single-use link on every boot
-# that claims its web console (which does not use the API key). Its passkey
-# sign-in cannot work behind Railway's domain anyway, so the link only helps
-# someone who can read the logs, for example on a public demo project.
-# Hide the token in the logs. XERJ still runs as PID 1 (exec), so Railway's
-# stop signal reaches it directly.
+# that claims its web console. Caddy blocks the console, and the link would
+# only help someone who can read the logs (for example on a public demo
+# project), so its token is hidden in the logs unless asked otherwise.
 if [ "${XERJ_SHOW_CONSOLE_SETUP_LINK:-false}" != "true" ]; then
   fifo="${TMPDIR:-/tmp}/xerj-log.$$"
   rm -f "$fifo"
   mkfifo "$fifo"
   sed -u -e 's|\(_xerj-console/setup#token=\)[A-Za-z0-9_-]*|\1[hidden-by-template]|g' < "$fifo" &
-  exec xerj --config "$CONFIG" "$@" > "$fifo" 2>&1
+  xerj --config "$CONFIG" "$@" > "$fifo" 2>&1 &
+else
+  xerj --config "$CONFIG" "$@" &
 fi
-exec xerj --config "$CONFIG" "$@"
+xerj_pid=$!
+
+log "starting $(caddy version 2>/dev/null | cut -d' ' -f1 | sed 's/^/Caddy /') on port $PORT, XERJ console blocked"
+caddy run --config "$CADDYFILE" --adapter caddyfile &
+caddy_pid=$!
+
+signalled=0
+stop() { kill -TERM "$caddy_pid" "$xerj_pid" 2>/dev/null || true; }
+on_signal() { signalled=1; trap - TERM INT; stop; }
+trap on_signal TERM INT
+
+# Returns when either process exits, or when Railway sends its stop signal.
+wait -n "$xerj_pid" "$caddy_pid" || true
+if [ "$signalled" = 1 ]; then
+  log "stop signal received, stopping XERJ and Caddy"
+else
+  log "a process stopped on its own; stopping the container so Railway restarts it"
+  stop
+fi
+
+# Let XERJ finish flushing to the volume before the container ends.
+while kill -0 "$xerj_pid" 2>/dev/null; do
+  wait "$xerj_pid" || true
+done
+status=0
+wait "$xerj_pid" || status=$?
+wait "$caddy_pid" 2>/dev/null || true
+# An unexpected stop must look like a failure, or Railway's default
+# restart-on-failure policy would leave the service down.
+if [ "$signalled" = 0 ] && [ "$status" = 0 ]; then
+  status=1
+fi
+exit "$status"

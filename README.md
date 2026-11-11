@@ -11,17 +11,18 @@ This is a community-maintained deployment package. It is not affiliated with or 
 | | |
 |---|---|
 | Service | `xerj`, built from this repository's `Dockerfile` |
-| Binary | The official XERJ release, pinned by version **and** SHA-256 |
+| Binaries | The official XERJ and [Caddy](https://caddyserver.com) releases, each pinned by version **and** checksum |
 | Storage | A Railway volume at `/data` (indices, write-ahead log, admin key) |
-| Public URL | HTTPS on Railway's domain, routed to the Elasticsearch-compatible API on port `9200` |
-| Security | API-key authentication **on**; the key is generated per deploy. TLS is terminated by Railway |
-| Health check | `GET /health/ready` (the only endpoint that answers without a key) |
+| Public URL | HTTPS on Railway's domain, routed through Caddy to the Elasticsearch-compatible API on port `9200` |
+| Security | API-key authentication **on**; the key is generated per deploy. XERJ listens on loopback only, and its web console is not exposed. TLS is terminated by Railway |
+| Health check | `GET /health/ready` (with `/health/live`, the only endpoints that answer without a key) |
 
-Out of the box XERJ is unusable on Railway for three reasons, and the entrypoint handles all three:
+Out of the box XERJ is unusable or unsafe on Railway for four reasons, and the image handles all four:
 
-1. It binds to `127.0.0.1` by default, so Railway's proxy cannot reach it. The template binds `0.0.0.0` and declares that TLS is terminated in front of it (`allow_insecure_network_bind`), which XERJ requires before it will listen on a network address without its own TLS. Authentication stays on.
-2. On first start it writes a random admin key to a file and never prints it, which leaves you locked out of your own service. The template generates the key as a Railway variable (`XERJ_ADMIN_KEY`) and writes it where XERJ expects it, so it is in your Variables tab from the first second. Change the variable and redeploy to rotate it.
-3. Its listening port is set in a TOML file, not from `$PORT`. The entrypoint writes that file on every boot.
+1. It binds to `127.0.0.1` by default, so Railway's proxy cannot reach it. The template keeps XERJ on `127.0.0.1` and puts Caddy in front of it on `$PORT`, so nothing reaches XERJ except through Caddy. Authentication stays on.
+2. It ships a web console with its own sign-in (passkeys tied to `localhost`), separate from the API key. That sign-in cannot work behind Railway's domain, and its setup and sign-in pages would be public, so Caddy answers `404` for everything under `/_xerj-console`.
+3. On first start it writes a random admin key to a file and never prints it, which leaves you locked out of your own service. The template generates the key as a Railway variable (`XERJ_ADMIN_KEY`) and writes it where XERJ expects it, so it is in your Variables tab from the first second. Change the variable and redeploy to rotate it.
+4. Its listening port is set in a TOML file, not from `$PORT`. The entrypoint writes that file on every boot.
 
 ## After deploying
 
@@ -105,7 +106,6 @@ XERJ_API_KEY=${{xerj.XERJ_ADMIN_KEY}}
 | `PORT` | `9200` | Port of the Elasticsearch-compatible API that Railway routes to. |
 | `XERJ_EMBED_MODE` | `lexical` | `lexical` is fast and needs nothing extra. `neural` runs a built-in MiniLM model for real semantic search: it downloads about 90 MB once into the volume and uses more RAM. Embeddings are computed when documents are indexed, so choose before you index. |
 | `XERJ_MAX_PROCESS_MEMORY_MB` | auto | Memory cap in MiB. When reached, XERJ sheds load with HTTP 429 instead of crashing. |
-| `XERJ_BIND_ADDRESS` | `0.0.0.0` | Set to `::` only in a legacy IPv6-only Railway environment. |
 | `XERJ_LOG` | `info` | Log filter, for example `debug`. |
 | `XERJ_DATA_DIR` | `/data` | Must match the volume's mount path. |
 | `XERJ_SHOW_CONSOLE_SETUP_LINK` | `false` | Set to `true` to stop hiding the token of XERJ's console setup link in the logs (see below). |
@@ -114,11 +114,12 @@ XERJ_API_KEY=${{xerj.XERJ_ADMIN_KEY}}
 
 - **Keep the volume.** Without a volume at `/data`, every redeploy starts empty; the logs warn you if it is missing.
 - **One replica.** XERJ runs as a single node here, and a Railway volume attaches to one replica.
-- **Console setup link hidden.** Until a console owner exists, XERJ prints on every boot a single-use link that claims its web console, which does not use the API key. Its passkey sign-in cannot work behind Railway's domain, so the link would only help someone who can read your logs (for example on a public project). The entrypoint replaces its token with `[hidden-by-template]`. Use the API key for everything; set `XERJ_SHOW_CONSOLE_SETUP_LINK=true` only if you know you need the link.
+- **Web console turned off.** XERJ's web console signs in with passkeys tied to `localhost` instead of the API key, so it cannot work behind Railway's domain. Caddy answers `404` for every path under `/_xerj-console`, which keeps its setup and sign-in pages off the internet. Use the API key for everything. XERJ still prints a single-use console setup link on every boot until an owner exists; the entrypoint replaces its token with `[hidden-by-template]` in the logs (set `XERJ_SHOW_CONSOLE_SETUP_LINK=true` to see it).
+- **Ports.** Only `$PORT` (Caddy) is reachable, from the internet and from other services in your project. XERJ's own listeners, including its native REST API and gRPC, stay on loopback inside the container.
 - **XERJ is a release candidate** (1.0.0-rc series). Read its [caveats](https://xerj.org/llms.txt) before relying on a feature, notably that the default embedding mode is lexical, not neural.
 - **Data leaving the node.** A default XERJ node sends no document text anywhere. Only features you switch on (rerank, a proxy embedder, the WAL tap) do; see XERJ's docs.
-- **Updates.** A weekly GitHub Action (`.github/workflows/bump-xerj.yml`) opens a pull request when XERJ publishes a new release, with the new version and checksum pinned.
+- **Updates.** A weekly GitHub Action (`.github/workflows/bump-xerj.yml`) opens a pull request when XERJ publishes a new release, with the new version and checksum pinned. Caddy is pinned the same way in the `Dockerfile` and upgraded by hand.
 
 ## Credits and license
 
-XERJ is developed by the XERJ project and licensed under Apache-2.0; its license and attribution notice ship inside the image at `/usr/share/doc/xerj/` (see also `NOTICE`). This template runs the unmodified official release. The files in this repository (Dockerfile, entrypoint, scripts) are MIT-licensed, see `LICENSE`.
+XERJ is developed by the XERJ project and licensed under Apache-2.0; its license and attribution notice ship inside the image at `/usr/share/doc/xerj/` (see also `NOTICE`). Caddy is licensed under Apache-2.0; its license ships at `/usr/share/doc/caddy/LICENSE`. This template runs the unmodified official releases of both. The files in this repository (Dockerfile, Caddyfile, entrypoint, scripts) are MIT-licensed, see `LICENSE`.

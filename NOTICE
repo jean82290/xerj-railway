@@ -7,5 +7,13 @@ This product includes software developed by the XERJ project (https://xerj.org).
 XERJ is licensed under the Apache License, Version 2.0; a copy of the license
 is installed in the image at /usr/share/doc/xerj/LICENSE.
 
+Caddy
+Copyright 2015 Matthew Holt and The Caddy Authors
+
+The image also runs the unmodified official Caddy release binary
+(https://caddyserver.com) as its front door. Caddy is licensed under the
+Apache License, Version 2.0; a copy of the license is installed in the image
+at /usr/share/doc/caddy/LICENSE.
+
 This template is community-maintained and is not affiliated with or endorsed
 by the XERJ project.
